@@ -159,6 +159,29 @@ void HoymilesRadio_CMT::loop()
         }
     }
 
+    // RX hop timeout: if no fragment received within the expected interval,
+    // cycle to the next frequency. MIT sends fragments at ~835ms intervals;
+    // if we haven't heard anything in 1000ms, we may be on the wrong channel.
+    if (_rxHopEnabled && _busyFlag) {
+        const uint32_t now = millis();
+        if (now - _rxHopLastFragTime >= 1000) {
+            _rxHopLastFragTime = now;
+            // Cycle through the 3 hop channels
+            const uint8_t nextFrag = (_rxHopLastFragId & 0x7F) + 1;
+            _rxHopLastFragId = nextFrag; // pretend we received it to advance the hop
+            const int8_t offset = getHopOffsetForFragment(nextFrag + 1);
+            const uint8_t nextChannel = static_cast<uint8_t>(static_cast<int8_t>(_rxHopBaseChannel) + offset);
+
+            if (nextChannel != _radio->getChannel()) {
+                _radio->stopListening();
+                _radio->setChannel(nextChannel);
+                _radio->startListening();
+                ESP_LOGD(TAG, "RX HOP: timeout, blind hop to ch %" PRIu8 " (%.2f MHz)",
+                    nextChannel, getFrequencyFromChannel(nextChannel) / 1000000.0);
+            }
+        }
+    }
+
     if (!_gpio3_configured) {
         if (_radio->rxFifoAvailable()) { // read INT2, PKT_OK flag
             _packetReceived = true;
@@ -241,6 +264,11 @@ void HoymilesRadio_CMT::loop()
                         getFrequencyFromChannel(f.channel) / 1000000.0, Utils::dumpArray(f.fragment, f.len).c_str(), f.rssi);
 
                     inv->addRxFragment(f.fragment, f.len, f.rssi);
+
+                    // Frequency hop to catch the next fragment from MIT inverters
+                    if (_rxHopEnabled && f.len > 9) {
+                        rxHopToNextFragment(f.fragment[9]);
+                    }
                 } else {
                     if (_captureMode) {
                         ESP_LOGI(TAG, "CAPTURE: Unknown inverter (not configured)");
@@ -266,6 +294,14 @@ void HoymilesRadio_CMT::loop()
     }
 
     handleReceivedPackage();
+
+    // After command completes (busyFlag cleared), disable RX hopping and
+    // return to the base frequency so the next command starts clean
+    if (_rxHopEnabled && !_busyFlag) {
+        ESP_LOGI(TAG, "RX HOP: command complete, restoring base frequency");
+        _rxHopEnabled = false;
+        cmtSwitchDtuFreq(_inverterTargetFrequency);
+    }
 }
 
 void HoymilesRadio_CMT::setPALevel(const int8_t paLevel)
@@ -346,6 +382,47 @@ bool HoymilesRadio_CMT::getCaptureMode() const
     return _captureMode;
 }
 
+int8_t HoymilesRadio_CMT::getHopOffsetForFragment(const uint8_t fragId)
+{
+    // MIT-5000-8T frequency hop pattern (confirmed by capture analysis):
+    //   frag 1 → base - 1 channel (-250kHz)
+    //   frag 2 → base
+    //   frag 3 → base + 1 channel (+250kHz)
+    //   frag 4 → base - 1 channel  (repeats)
+    //   frag 5 → base
+    //   frag 6 (0x86) → base + 1 channel
+    // Pattern: offset = ((fragId - 1) % 3) - 1  → gives -1, 0, +1 repeating
+    const uint8_t id = (fragId & 0x7F); // strip high bit (0x86 → 6)
+    return static_cast<int8_t>((id - 1) % 3) - 1;
+}
+
+void HoymilesRadio_CMT::rxHopToNextFragment(const uint8_t receivedFragId)
+{
+    if (!_rxHopEnabled) {
+        return;
+    }
+
+    _rxHopLastFragId = receivedFragId;
+    _rxHopLastFragTime = millis();
+
+    // Calculate next expected fragment ID
+    const uint8_t nextFragId = (receivedFragId & 0x7F) + 1; // 0x86 means we're done, but hop anyway
+    const int8_t nextOffset = getHopOffsetForFragment(nextFragId);
+    const uint8_t nextChannel = static_cast<uint8_t>(static_cast<int8_t>(_rxHopBaseChannel) + nextOffset);
+
+    const uint8_t currentChannel = _radio->getChannel();
+    if (nextChannel != currentChannel) {
+        _radio->stopListening();
+        _radio->setChannel(nextChannel);
+        _radio->startListening();
+
+        ESP_LOGD(TAG, "RX HOP: frag %" PRIu8 " received → hop to ch %" PRIu8 " (%.2f MHz) for next frag %" PRIu8,
+            receivedFragId & 0x7F, nextChannel,
+            getFrequencyFromChannel(nextChannel) / 1000000.0,
+            nextFragId);
+    }
+}
+
 uint32_t HoymilesRadio_CMT::getInvBootFrequency() const
 {
     // Hoymiles boot/init frequency after power up inverter or connection lost for 15 min
@@ -381,6 +458,35 @@ void HoymilesRadio_CMT::sendEsbPacket(CommandAbstract& cmd)
         ESP_LOGE(TAG, "TX SPI Timeout");
     }
     cmtSwitchDtuFreq(_inverterTargetFrequency);
+
+    // Enable receive-side frequency hopping for MIT inverters (serial prefix 0x1520)
+    // MIT hops response fragments across 3 frequencies: base-250kHz, base, base+250kHz
+    const uint16_t prefix = (cmd.getTargetAddress() >> 32) & 0xffff;
+    if (prefix == 0x1520 && cmd.getDataPayload()[0] != 0x56) { // not ChannelChange
+        _rxHopEnabled = true;
+        _rxHopBaseChannel = getChannelFromFrequency(_inverterTargetFrequency);
+        _rxHopLastFragId = 0;
+        _rxHopLastFragTime = millis();
+
+        // Determine which fragment to expect first
+        uint8_t expectedFirstFrag = 1;
+        if (cmd.getDataPayload()[0] == 0x15 && cmd.getDataSize() >= 10) {
+            // Retransmit request: payload[9] has fragment ID with bit 7 set
+            expectedFirstFrag = cmd.getDataPayload()[9] & 0x7F;
+        }
+
+        const int8_t offset = getHopOffsetForFragment(expectedFirstFrag);
+        const uint8_t firstChannel = static_cast<uint8_t>(static_cast<int8_t>(_rxHopBaseChannel) + offset);
+        _radio->setChannel(firstChannel);
+
+        ESP_LOGI(TAG, "RX HOP: MIT detected, expecting frag %" PRIu8 " on ch %" PRIu8 " (%.2f MHz), base ch %" PRIu8,
+            expectedFirstFrag, firstChannel,
+            getFrequencyFromChannel(firstChannel) / 1000000.0,
+            _rxHopBaseChannel);
+    } else {
+        _rxHopEnabled = false;
+    }
+
     _radio->startListening();
     _busyFlag = true;
     _rxTimeout.set(cmd.getTimeout());

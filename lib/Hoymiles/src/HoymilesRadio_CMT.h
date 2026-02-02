@@ -98,4 +98,17 @@ private:
     uint8_t _captureChIdx = 0;
     uint32_t _captureLastHop = 0;
     static constexpr uint32_t CAPTURE_HOP_INTERVAL_MS = 50; // dwell time per channel (50ms × 29ch = ~1.5s sweep)
+
+    // Receive-side frequency hopping for MIT inverters
+    // MIT-5000-8T hops response fragments across 3 frequencies spaced 250kHz apart:
+    //   frag 1 → base - 250kHz, frag 2 → base, frag 3 → base + 250kHz (repeats)
+    // Without hopping, OpenDTU only receives 2 of 6 fragments (those on the base freq).
+    bool _rxHopEnabled = false;          // true when waiting for MIT response
+    uint8_t _rxHopBaseChannel = 0;       // channel corresponding to _inverterTargetFrequency
+    uint8_t _rxHopLastFragId = 0;        // last fragment ID received (1-based)
+    uint32_t _rxHopLastFragTime = 0;     // millis() when last fragment was received
+
+    // Map fragment ID (1-based) to channel offset from base: -1, 0, +1 repeating
+    static int8_t getHopOffsetForFragment(const uint8_t fragId);
+    void rxHopToNextFragment(const uint8_t receivedFragId);
 };
