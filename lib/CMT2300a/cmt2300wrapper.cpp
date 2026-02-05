@@ -332,13 +332,12 @@ bool CMT2300A::_init_radio()
 
     CMT2300A_SetFrequencyStep(FH_OFFSET); // set FH_OFFSET (frequency = base freq + 2.5kHz*FH_OFFSET*FH_CHANNEL)
 
-    /* Configure AFC overflow threshold for RX fast frequency hopping.
-     * Per AN197, the AFC circuit needs a wider threshold when hopping
-     * between channels in RX mode. The default RFPDK value (0x0A) is
-     * tuned for single-channel operation. A wider value prevents AFC
-     * from losing lock after channel switches during FH.
-     * This value may need tuning per AN197's calculation tool. */
-    CMT2300A_SetAfcOvfTh(CMT_AFC_OVF_TH_FH);
+    /* NOTE: AFC overflow threshold (CUS_FSK4 register 0x27) change
+     * disabled for now. The register contains other control bits in
+     * the upper bits (RFPDK default 0x20), and SetAfcOvfTh() overwrites
+     * the entire register, clobbering those bits and killing the radio.
+     * TODO: implement proper read-modify-write for AFC_OVF_TH field only.
+     * CMT2300A_SetAfcOvfTh(CMT_AFC_OVF_TH_FH); */
 
     /* Use a single 64-byte FIFO for either Tx or Rx */
     CMT2300A_EnableFifoMerge(true);
