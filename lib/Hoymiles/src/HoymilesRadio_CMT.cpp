@@ -367,10 +367,26 @@ void HoymilesRadio_CMT::sendEsbPacket(CommandAbstract& cmd)
         _rxHopLastFragId = 0;
         _rxHopLastFragTime = millis();
 
-        // Stay on base channel initially — hop after first fragment received.
-        // (Preemptive hop to ch base-1 caused 0% RX — MIT may not respond at -1 from our TX freq)
-        ESP_LOGI(TAG, "RX HOP: enabled for MIT, base ch %" PRIu8 " (%.2f MHz), waiting for first fragment",
-            _rxHopBaseChannel, getFrequencyFromChannel(_rxHopBaseChannel) / 1000000.0);
+        // For retransmit commands (0x15): position on the exact channel where
+        // the requested fragment is expected. Retransmit responses are single
+        // packets (not bursts), so we can pre-position reliably.
+        if (cmd.getDataPayload()[0] == 0x15) {
+            const uint8_t fragNo = cmd.getDataPayload()[9] & 0x7F;
+            const int8_t offset = getHopOffsetForFragment(fragNo);
+            const uint8_t targetChannel = static_cast<uint8_t>(static_cast<int8_t>(_rxHopBaseChannel) + offset);
+            if (targetChannel != _rxHopBaseChannel) {
+                if (!_radio->hopChannel(targetChannel)) {
+                    ESP_LOGE(TAG, "RX HOP: hopChannel FAILED for retransmit ch %" PRIu8, targetChannel);
+                }
+            }
+            ESP_LOGI(TAG, "RX HOP: retransmit frag %" PRIu8 " → ch %" PRIu8 " (%.2f MHz)",
+                fragNo, targetChannel, getFrequencyFromChannel(targetChannel) / 1000000.0);
+        } else {
+            // Initial poll: stay on base channel — fragments arrive as burst,
+            // can only catch those on base frequency (~1/3 of fragments)
+            ESP_LOGI(TAG, "RX HOP: initial poll, base ch %" PRIu8 " (%.2f MHz)",
+                _rxHopBaseChannel, getFrequencyFromChannel(_rxHopBaseChannel) / 1000000.0);
+        }
     } else {
         _rxHopEnabled = false;
     }
