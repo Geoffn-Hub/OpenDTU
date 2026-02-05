@@ -106,6 +106,20 @@ void CMT2300A::setChannel(const uint8_t channel)
     CMT2300A_SetFrequencyChannel(channel);
 }
 
+void CMT2300A::setChannelFast(const uint8_t channel)
+{
+    // Fast frequency hopping: write FH_CHANNEL register directly.
+    // The CMT2300A is designed to retune the PLL without leaving RX mode
+    // when this register is written (see datasheet section "Fast Frequency
+    // Hopping" and application note AN197).
+    CMT2300A_SetFrequencyChannel(channel);
+}
+
+void CMT2300A::setAfcOvfTh(const uint8_t afcOvfTh)
+{
+    CMT2300A_SetAfcOvfTh(afcOvfTh);
+}
+
 uint8_t CMT2300A::getChannel(void)
 {
     return CMT2300A_ReadReg(CMT2300A_CUS_FREQ_CHNL);
@@ -317,6 +331,14 @@ bool CMT2300A::_init_radio()
         CMT2300A_MASK_TX_DONE_EN | CMT2300A_MASK_PREAM_OK_EN | CMT2300A_MASK_SYNC_OK_EN | CMT2300A_MASK_CRC_OK_EN | CMT2300A_MASK_PKT_DONE_EN);
 
     CMT2300A_SetFrequencyStep(FH_OFFSET); // set FH_OFFSET (frequency = base freq + 2.5kHz*FH_OFFSET*FH_CHANNEL)
+
+    /* Configure AFC overflow threshold for RX fast frequency hopping.
+     * Per AN197, the AFC circuit needs a wider threshold when hopping
+     * between channels in RX mode. The default RFPDK value (0x0A) is
+     * tuned for single-channel operation. A wider value prevents AFC
+     * from losing lock after channel switches during FH.
+     * This value may need tuning per AN197's calculation tool. */
+    CMT2300A_SetAfcOvfTh(CMT_AFC_OVF_TH_FH);
 
     /* Use a single 64-byte FIFO for either Tx or Rx */
     CMT2300A_EnableFifoMerge(true);

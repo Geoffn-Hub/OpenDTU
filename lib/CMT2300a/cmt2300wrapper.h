@@ -6,6 +6,7 @@
 #define CMT2300A_ONE_STEP_SIZE 2500 // frequency channel step size for fast frequency hopping operation: One step size is 2.5 kHz.
 #define FH_OFFSET 100 // value * CMT2300A_ONE_STEP_SIZE = channel frequency offset
 #define CMT_SPI_SPEED 4000000 // 4 MHz
+#define CMT_AFC_OVF_TH_FH 0x1F // AFC overflow threshold for RX fast frequency hopping (AN197). Wider than RFPDK default (0x0A) to prevent AFC losing lock after channel hops. May need tuning.
 
 #define CMT_BASE_FREQ_900 900000000
 #define CMT_BASE_FREQ_860 860000000
@@ -73,10 +74,31 @@ public:
     void setChannel(const uint8_t channel);
 
     /**
+     * Set RF communication channel using fast frequency hopping.
+     * Unlike setChannel(), this writes only the FH_CHANNEL register
+     * without any state transitions, allowing channel changes while
+     * the radio remains in RX mode. This is the CMT2300A's native
+     * fast frequency hopping mechanism (see AN197).
+     *
+     * @param channel Which RF channel to switch to, 0-254
+     */
+    void setChannelFast(const uint8_t channel);
+
+    /**
      * Get RF communication channel
      * @return The currently configured RF Channel
      */
     uint8_t getChannel(void);
+
+    /**
+     * Set the AFC overflow threshold for RX fast frequency hopping.
+     * Per AN197, the AFC circuit may need reconfiguration when hopping
+     * between channels in RX mode. A wider threshold prevents the AFC
+     * from losing lock after channel switches.
+     *
+     * @param afcOvfTh AFC overflow threshold value (see AN197)
+     */
+    void setAfcOvfTh(const uint8_t afcOvfTh);
 
     /**
      * Get Dynamic Payload Size
