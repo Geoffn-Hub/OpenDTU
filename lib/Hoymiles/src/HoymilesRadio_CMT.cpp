@@ -188,14 +188,13 @@ void HoymilesRadio_CMT::loop()
         _radio->flush_rx();
         _packetReceived = false;
 
-        // Immediate RX frequency hop for MIT inverters:
-        // After draining all fragments from FIFO, hop to the expected channel
-        // for the NEXT fragment. This must happen here (not in the else block)
-        // because the next fragment arrives within ~10ms on a different frequency.
-        // Uses proper AN197 state transitions (STBY → set channel → RX).
-        if (_rxHopEnabled && gotFragment) {
-            rxHopToNextFragment(lastFragId);
-        }
+        // NOTE: Per-fragment RX hopping disabled.
+        // MIT fragments arrive as a burst (~10ms apart) — all arrive before
+        // loop() processes the interrupt. Hopping after FIFO drain is too late.
+        // Need per-RETRANSMIT channel rotation instead (future work).
+        // if (_rxHopEnabled && gotFragment) {
+        //     rxHopToNextFragment(lastFragId);
+        // }
 
     } else {
         // Perform package parsing only if no packages are received
