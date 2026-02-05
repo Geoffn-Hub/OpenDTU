@@ -368,15 +368,10 @@ void HoymilesRadio_CMT::sendEsbPacket(CommandAbstract& cmd)
         _rxHopLastFragId = 0;
         _rxHopLastFragTime = millis();
 
-        // Preemptively hop to the expected channel for fragment 1.
-        // MIT inverters start responding at offset -1 from base frequency.
-        const int8_t firstOffset = getHopOffsetForFragment(1);
-        const uint8_t firstChannel = static_cast<uint8_t>(static_cast<int8_t>(_rxHopBaseChannel) + firstOffset);
-        if (firstChannel != _rxHopBaseChannel) {
-            _radio->hopChannel(firstChannel);
-        }
-        ESP_LOGD(TAG, "RX HOP: enabled for MIT, base ch %" PRIu8 ", listening on ch %" PRIu8 " (%.2f MHz)",
-            _rxHopBaseChannel, firstChannel, getFrequencyFromChannel(firstChannel) / 1000000.0);
+        // Stay on base channel initially — hop after first fragment received.
+        // (Preemptive hop to ch base-1 caused 0% RX — MIT may not respond at -1 from our TX freq)
+        ESP_LOGI(TAG, "RX HOP: enabled for MIT, base ch %" PRIu8 " (%.2f MHz), waiting for first fragment",
+            _rxHopBaseChannel, getFrequencyFromChannel(_rxHopBaseChannel) / 1000000.0);
     } else {
         _rxHopEnabled = false;
     }
@@ -416,8 +411,10 @@ void HoymilesRadio_CMT::rxHopToNextFragment(const uint8_t receivedFragId)
     if (receivedFragId & 0x80) {
         const uint8_t currentChannel = _radio->getChannel();
         if (currentChannel != _rxHopBaseChannel) {
-            _radio->hopChannel(_rxHopBaseChannel);
-            ESP_LOGD(TAG, "RX HOP: last frag %" PRIu8 " → return to base ch %" PRIu8,
+            if (!_radio->hopChannel(_rxHopBaseChannel)) {
+                ESP_LOGE(TAG, "RX HOP: hopChannel FAILED returning to base ch %" PRIu8, _rxHopBaseChannel);
+            }
+            ESP_LOGI(TAG, "RX HOP: last frag %" PRIu8 " → return to base ch %" PRIu8,
                 receivedFragId & 0x7F, _rxHopBaseChannel);
         }
         return;
@@ -429,8 +426,10 @@ void HoymilesRadio_CMT::rxHopToNextFragment(const uint8_t receivedFragId)
     const uint8_t nextChannel = static_cast<uint8_t>(static_cast<int8_t>(_rxHopBaseChannel) + offset);
 
     // AN197: proper state transitions required to retune PLL
-    _radio->hopChannel(nextChannel);
-    ESP_LOGD(TAG, "RX HOP: frag %" PRIu8 " → hop to ch %" PRIu8 " (%.2f MHz) for frag %" PRIu8,
-        receivedFragId & 0x7F, nextChannel,
-        getFrequencyFromChannel(nextChannel) / 1000000.0, nextFragId);
+    if (!_radio->hopChannel(nextChannel)) {
+        ESP_LOGE(TAG, "RX HOP: hopChannel FAILED for ch %" PRIu8 " — GoRx did not complete!", nextChannel);
+    }
+    ESP_LOGI(TAG, "RX HOP: frag %" PRIu8 " (ch %" PRIu8 " %.2f MHz) → hop to ch %" PRIu8 " (%.2f MHz) for frag %" PRIu8,
+        receivedFragId & 0x7F, _radio->getChannel(), getFrequencyFromChannel(_radio->getChannel()) / 1000000.0,
+        nextChannel, getFrequencyFromChannel(nextChannel) / 1000000.0, nextFragId);
 }

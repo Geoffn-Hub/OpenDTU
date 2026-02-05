@@ -113,7 +113,7 @@ void CMT2300A::setChannelFast(const uint8_t channel)
     CMT2300A_SetFrequencyChannel(channel);
 }
 
-void CMT2300A::hopChannel(const uint8_t channel)
+bool CMT2300A::hopChannel(const uint8_t channel)
 {
     // AN197 "Fast Manual Frequency Hopping" — proper sequence:
     // 1. Return to STBY (exit RX, PLL stops)
@@ -124,7 +124,7 @@ void CMT2300A::hopChannel(const uint8_t channel)
     CMT2300A_ClearInterruptFlags();
     CMT2300A_EnableReadFifo();
     CMT2300A_ClearRxFifo();
-    CMT2300A_GoRx();
+    return CMT2300A_GoRx();
 }
 
 uint8_t CMT2300A::getChannel(void)

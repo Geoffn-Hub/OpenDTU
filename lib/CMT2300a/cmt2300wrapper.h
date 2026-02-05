@@ -84,7 +84,7 @@ public:
      * The CMT2300A requires exiting RX to retune the PLL.
      * Typical transition time ~100-200µs — fast enough for inter-fragment gaps.
      */
-    void hopChannel(const uint8_t channel);
+    bool hopChannel(const uint8_t channel);
 
     /**
      * Get RF communication channel
