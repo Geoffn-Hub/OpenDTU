@@ -108,10 +108,23 @@ void CMT2300A::setChannel(const uint8_t channel)
 
 void CMT2300A::setChannelFast(const uint8_t channel)
 {
-    // Fast frequency hopping: write FH_CHANNEL register directly.
-    // The CMT2300A retunes the PLL while staying in RX mode when
-    // this register is written (AN197). No state transitions needed.
+    // DEPRECATED: Writing FH_CHANNEL in RX mode does NOT retune the PLL.
+    // AN197 requires state transitions (STBY→RX). Use hopChannel() instead.
     CMT2300A_SetFrequencyChannel(channel);
+}
+
+void CMT2300A::hopChannel(const uint8_t channel)
+{
+    // AN197 "Fast Manual Frequency Hopping" — proper sequence:
+    // 1. Return to STBY (exit RX, PLL stops)
+    // 2. Write FH_CHANNEL register
+    // 3. Re-enter RX (PLL retunes to new frequency)
+    CMT2300A_GoStby();
+    CMT2300A_SetFrequencyChannel(channel);
+    CMT2300A_ClearInterruptFlags();
+    CMT2300A_EnableReadFifo();
+    CMT2300A_ClearRxFifo();
+    CMT2300A_GoRx();
 }
 
 uint8_t CMT2300A::getChannel(void)

@@ -152,26 +152,6 @@ void HoymilesRadio_CMT::loop()
         }
     }
 
-    // RX hop timeout: if no fragment received within the expected interval,
-    // blind-hop to the next frequency channel for MIT inverters.
-    if (_rxHopEnabled && _busyFlag) {
-        const uint32_t now = millis();
-        if (now - _rxHopLastFragTime >= 1000) {
-            _rxHopLastFragTime = now;
-            const uint8_t nextFrag = (_rxHopLastFragId & 0x7F) + 1;
-            _rxHopLastFragId = nextFrag;
-            const int8_t offset = getHopOffsetForFragment(nextFrag + 1);
-            const uint8_t nextChannel = static_cast<uint8_t>(static_cast<int8_t>(_rxHopBaseChannel) + offset);
-
-            if (nextChannel != _radio->getChannel()) {
-                // Fast FH: single register write, radio stays in RX
-                _radio->setChannelFast(nextChannel);
-                ESP_LOGD(TAG, "RX HOP: timeout, fast hop to ch %" PRIu8 " (%.2f MHz)",
-                    nextChannel, getFrequencyFromChannel(nextChannel) / 1000000.0);
-            }
-        }
-    }
-
     if (!_gpio3_configured) {
         if (_radio->rxFifoAvailable()) { // read INT2, PKT_OK flag
             _packetReceived = true;
@@ -180,6 +160,9 @@ void HoymilesRadio_CMT::loop()
 
     if (_packetReceived) {
         ESP_LOGV(TAG, "Interrupt received");
+        uint8_t lastFragId = 0;
+        bool gotFragment = false;
+
         while (_radio->available()) {
             if (_rxBuffer.size() > FRAGMENT_BUFFER_SIZE) {
                 ESP_LOGE(TAG, "CMT2300A: Buffer full");
@@ -196,9 +179,23 @@ void HoymilesRadio_CMT::loop()
             f.mainCmd = 0x00;
             _radio->read(f.fragment, f.len);
             _rxBuffer.push(f);
+
+            if (f.len > 9) {
+                lastFragId = f.fragment[9];
+                gotFragment = true;
+            }
         }
         _radio->flush_rx();
         _packetReceived = false;
+
+        // Immediate RX frequency hop for MIT inverters:
+        // After draining all fragments from FIFO, hop to the expected channel
+        // for the NEXT fragment. This must happen here (not in the else block)
+        // because the next fragment arrives within ~10ms on a different frequency.
+        // Uses proper AN197 state transitions (STBY → set channel → RX).
+        if (_rxHopEnabled && gotFragment) {
+            rxHopToNextFragment(lastFragId);
+        }
 
     } else {
         // Perform package parsing only if no packages are received
@@ -242,11 +239,6 @@ void HoymilesRadio_CMT::loop()
                             getFrequencyFromChannel(f.channel) / 1000000.0, Utils::dumpArray(f.fragment, f.len).c_str(), f.rssi);
 
                         inv->addRxFragment(f.fragment, f.len, f.rssi);
-
-                        // Frequency hop to catch the next fragment from MIT inverters
-                        if (_rxHopEnabled && f.len > 9) {
-                            rxHopToNextFragment(f.fragment[9]);
-                        }
                     } else {
                         if (_captureMode) {
                             ESP_LOGI(TAG, "CAPTURE: Unknown inverter (not configured)");
@@ -375,8 +367,16 @@ void HoymilesRadio_CMT::sendEsbPacket(CommandAbstract& cmd)
         _rxHopBaseChannel = _radio->getChannel();
         _rxHopLastFragId = 0;
         _rxHopLastFragTime = millis();
-        ESP_LOGD(TAG, "RX HOP: enabled for MIT, base ch %" PRIu8 " (%.2f MHz)",
-            _rxHopBaseChannel, getFrequencyFromChannel(_rxHopBaseChannel) / 1000000.0);
+
+        // Preemptively hop to the expected channel for fragment 1.
+        // MIT inverters start responding at offset -1 from base frequency.
+        const int8_t firstOffset = getHopOffsetForFragment(1);
+        const uint8_t firstChannel = static_cast<uint8_t>(static_cast<int8_t>(_rxHopBaseChannel) + firstOffset);
+        if (firstChannel != _rxHopBaseChannel) {
+            _radio->hopChannel(firstChannel);
+        }
+        ESP_LOGD(TAG, "RX HOP: enabled for MIT, base ch %" PRIu8 ", listening on ch %" PRIu8 " (%.2f MHz)",
+            _rxHopBaseChannel, firstChannel, getFrequencyFromChannel(firstChannel) / 1000000.0);
     } else {
         _rxHopEnabled = false;
     }
@@ -412,16 +412,25 @@ void HoymilesRadio_CMT::rxHopToNextFragment(const uint8_t receivedFragId)
     _rxHopLastFragId = receivedFragId;
     _rxHopLastFragTime = millis();
 
+    // Last fragment (bit 7 set) — response complete, return to base channel
+    if (receivedFragId & 0x80) {
+        const uint8_t currentChannel = _radio->getChannel();
+        if (currentChannel != _rxHopBaseChannel) {
+            _radio->hopChannel(_rxHopBaseChannel);
+            ESP_LOGD(TAG, "RX HOP: last frag %" PRIu8 " → return to base ch %" PRIu8,
+                receivedFragId & 0x7F, _rxHopBaseChannel);
+        }
+        return;
+    }
+
     // Predict the channel for the next fragment
     const uint8_t nextFragId = (receivedFragId & 0x7F) + 1;
     const int8_t offset = getHopOffsetForFragment(nextFragId);
     const uint8_t nextChannel = static_cast<uint8_t>(static_cast<int8_t>(_rxHopBaseChannel) + offset);
 
-    if (nextChannel != _radio->getChannel()) {
-        // Fast FH: single register write, radio stays in RX
-        _radio->setChannelFast(nextChannel);
-        ESP_LOGD(TAG, "RX HOP: frag %" PRIu8 " → fast hop to ch %" PRIu8 " (%.2f MHz) for next frag %" PRIu8,
-            receivedFragId & 0x7F, nextChannel,
-            getFrequencyFromChannel(nextChannel) / 1000000.0, nextFragId);
-    }
+    // AN197: proper state transitions required to retune PLL
+    _radio->hopChannel(nextChannel);
+    ESP_LOGD(TAG, "RX HOP: frag %" PRIu8 " → hop to ch %" PRIu8 " (%.2f MHz) for frag %" PRIu8,
+        receivedFragId & 0x7F, nextChannel,
+        getFrequencyFromChannel(nextChannel) / 1000000.0, nextFragId);
 }
