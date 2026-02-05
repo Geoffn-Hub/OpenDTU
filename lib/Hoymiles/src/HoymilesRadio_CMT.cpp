@@ -164,10 +164,9 @@ void HoymilesRadio_CMT::loop()
             const uint8_t nextChannel = static_cast<uint8_t>(static_cast<int8_t>(_rxHopBaseChannel) + offset);
 
             if (nextChannel != _radio->getChannel()) {
-                _radio->stopListening();
-                _radio->setChannel(nextChannel);
-                _radio->startListening();
-                ESP_LOGD(TAG, "RX HOP: timeout, hop to ch %" PRIu8 " (%.2f MHz)",
+                // Fast FH: single register write, radio stays in RX
+                _radio->setChannelFast(nextChannel);
+                ESP_LOGD(TAG, "RX HOP: timeout, fast hop to ch %" PRIu8 " (%.2f MHz)",
                     nextChannel, getFrequencyFromChannel(nextChannel) / 1000000.0);
             }
         }
@@ -419,10 +418,9 @@ void HoymilesRadio_CMT::rxHopToNextFragment(const uint8_t receivedFragId)
     const uint8_t nextChannel = static_cast<uint8_t>(static_cast<int8_t>(_rxHopBaseChannel) + offset);
 
     if (nextChannel != _radio->getChannel()) {
-        _radio->stopListening();
-        _radio->setChannel(nextChannel);
-        _radio->startListening();
-        ESP_LOGD(TAG, "RX HOP: frag %" PRIu8 " → hop to ch %" PRIu8 " (%.2f MHz) for next frag %" PRIu8,
+        // Fast FH: single register write, radio stays in RX
+        _radio->setChannelFast(nextChannel);
+        ESP_LOGD(TAG, "RX HOP: frag %" PRIu8 " → fast hop to ch %" PRIu8 " (%.2f MHz) for next frag %" PRIu8,
             receivedFragId & 0x7F, nextChannel,
             getFrequencyFromChannel(nextChannel) / 1000000.0, nextFragId);
     }

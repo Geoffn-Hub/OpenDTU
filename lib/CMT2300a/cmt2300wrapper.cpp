@@ -106,6 +106,14 @@ void CMT2300A::setChannel(const uint8_t channel)
     CMT2300A_SetFrequencyChannel(channel);
 }
 
+void CMT2300A::setChannelFast(const uint8_t channel)
+{
+    // Fast frequency hopping: write FH_CHANNEL register directly.
+    // The CMT2300A retunes the PLL while staying in RX mode when
+    // this register is written (AN197). No state transitions needed.
+    CMT2300A_SetFrequencyChannel(channel);
+}
+
 uint8_t CMT2300A::getChannel(void)
 {
     return CMT2300A_ReadReg(CMT2300A_CUS_FREQ_CHNL);
