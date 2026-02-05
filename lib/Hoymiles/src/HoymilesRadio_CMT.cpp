@@ -160,9 +160,6 @@ void HoymilesRadio_CMT::loop()
 
     if (_packetReceived) {
         ESP_LOGV(TAG, "Interrupt received");
-        uint8_t lastFragId = 0;
-        bool gotFragment = false;
-
         while (_radio->available()) {
             if (_rxBuffer.size() > FRAGMENT_BUFFER_SIZE) {
                 ESP_LOGE(TAG, "CMT2300A: Buffer full");
@@ -179,22 +176,9 @@ void HoymilesRadio_CMT::loop()
             f.mainCmd = 0x00;
             _radio->read(f.fragment, f.len);
             _rxBuffer.push(f);
-
-            if (f.len > 9) {
-                lastFragId = f.fragment[9];
-                gotFragment = true;
-            }
         }
         _radio->flush_rx();
         _packetReceived = false;
-
-        // NOTE: Per-fragment RX hopping disabled.
-        // MIT fragments arrive as a burst (~10ms apart) — all arrive before
-        // loop() processes the interrupt. Hopping after FIFO drain is too late.
-        // Need per-RETRANSMIT channel rotation instead (future work).
-        // if (_rxHopEnabled && gotFragment) {
-        //     rxHopToNextFragment(lastFragId);
-        // }
 
     } else {
         // Perform package parsing only if no packages are received
