@@ -136,7 +136,7 @@ void HoymilesRadio_CMT::loop()
             if (_rxBuffer.size() > FRAGMENT_BUFFER_SIZE) {
                 ESP_LOGE(TAG, "CMT2300A: Buffer full");
                 _radio->flush_rx();
-                continue;
+                break; // PR #2963: break instead of continue to avoid infinite loop
             }
 
             fragment_t f;
